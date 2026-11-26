@@ -85,7 +85,7 @@ Rectangle {
                 spacing: 14
                 Item { Layout.fillHeight: true }
                 Title { text: qsTr("Welcome to Keyglow") }
-                Lead { text: qsTr("Light for your CB Artemis: fifty scenes, from a quiet candle to keys that flare as you type. Here it is, live.") }
+                Lead { text: qsTr("Light for your keyboard: fifty scenes, from a quiet candle to keys that flare as you type. Here it is, live.") }
                 KeyboardView {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 250
@@ -101,7 +101,7 @@ Rectangle {
                         text: intro.ready ? qsTr("Your keyboard is connected and should be glowing right now.")
                             : backend.deviceStatus === "permission"
                                 ? qsTr("The keyboard is plugged in, but access is blocked. Reinstall Keyglow, then replug it.")
-                                : qsTr("Plug the keyboard in with its cable. Lighting doesn't work over Bluetooth or the dongle.")
+                                : qsTr("No keyboard found yet. Plug a CB Artemis in with its cable, or start OpenRGB's server for any other keyboard.")
                     }
                 }
                 Item { Layout.fillHeight: true }

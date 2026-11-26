@@ -41,7 +41,7 @@ ApplicationWindow {
     Shortcut { sequence: "F"; enabled: win.keysFree; context: Qt.ApplicationShortcut; onActivated: backend.fillCustom() }
     Shortcut { sequence: "P"; enabled: win.keysFree; context: Qt.ApplicationShortcut; onActivated: backend.paintFromCurrent() }
     Shortcut { sequence: "S"; enabled: win.keysFree; context: Qt.ApplicationShortcut; onActivated: backend.toggleFavorite(backend.preset) }
-    Shortcut { sequence: "T"; enabled: win.keysFree; context: Qt.ApplicationShortcut; onActivated: backend.startQuickSync() }
+    Shortcut { sequence: "T"; enabled: win.keysFree && backend.canSync; context: Qt.ApplicationShortcut; onActivated: backend.startQuickSync() }
 
     component Caption: Label {
         opacity: 0.55
@@ -99,9 +99,9 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         opacity: 0.6
                         elide: Text.ElideRight
-                        text: backend.deviceStatus === "ready" ? qsTr("CB Artemis connected")
-                            : backend.deviceStatus === "permission" ? qsTr("CB Artemis found, but access is blocked")
-                            : qsTr("CB Artemis not found")
+                        text: backend.deviceStatus === "ready" ? qsTr("%1 connected").arg(backend.deviceName)
+                            : backend.deviceStatus === "permission" ? qsTr("%1 found, but access is blocked").arg(backend.deviceName)
+                            : qsTr("No keyboard found")
                     }
                     Switch {
                         text: win.narrow ? "" : backend.power ? qsTr("Lights on") : qsTr("Lights off")
@@ -127,7 +127,7 @@ ApplicationWindow {
                         color: "#ffb4b4"
                         text: backend.deviceStatus === "permission"
                             ? qsTr("The keyboard is plugged in, but Keyglow isn't allowed to talk to it. Reinstall Keyglow (it ships the access rule), then replug the keyboard.")
-                            : qsTr("Plug the keyboard in with its cable. Lighting can't be set over Bluetooth or the 2.4G dongle.")
+                            : qsTr("No keyboard to light was found. A CB Artemis must be plugged in with its cable (lighting can't be set over Bluetooth or the 2.4G dongle). Any other keyboard is reached through OpenRGB: install it and start its server with \"openrgb --server\".")
                     }
                 }
 
@@ -476,6 +476,7 @@ ApplicationWindow {
                                 flat: true
                                 focusPolicy: Qt.NoFocus
                                 Material.roundedScale: theme.radius
+                                visible: backend.canSync
                                 text: backend.taught ? qsTr("Sync keys again") : qsTr("Sync keys")
                                 onClicked: backend.startQuickSync()
                             }

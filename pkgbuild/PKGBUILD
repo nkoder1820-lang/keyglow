@@ -1,10 +1,11 @@
 pkgname=keyglow
-pkgver=1.2.1
+pkgver=1.3.0
 pkgrel=1
-pkgdesc='Backlight scenes for the Cosmic Byte CB Artemis keyboard'
+pkgdesc='Backlight scenes for RGB keyboards'
 arch=('x86_64' 'aarch64')
 license=('MIT')
 depends=('qt6-base' 'qt6-declarative' 'qt6-wayland')
+optdepends=('openrgb: light keyboards other than the Cosmic Byte CB Artemis')
 makedepends=('gcc' 'make')
 source=()
 sha256sums=()

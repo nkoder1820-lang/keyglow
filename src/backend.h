@@ -10,6 +10,7 @@
 #include <QVariantMap>
 #include <memory>
 
+#include "device.h"
 #include "keyinput.h"
 #include "lighting.h"
 
@@ -40,6 +41,8 @@ class Backend : public QObject {
     Q_PROPERTY(int frame READ frame NOTIFY frameChanged)
     Q_PROPERTY(int downTick READ downTick NOTIFY downChanged)
     Q_PROPERTY(QString deviceStatus READ deviceStatus NOTIFY deviceStatusChanged)
+    Q_PROPERTY(QString deviceName READ deviceName NOTIFY deviceStatusChanged)
+    Q_PROPERTY(bool canSync READ canSync NOTIFY deviceStatusChanged)
     Q_PROPERTY(bool autostart READ autostart WRITE setAutostart NOTIFY autostartChanged)
     Q_PROPERTY(bool teaching READ teaching NOTIFY teachChanged)
     Q_PROPERTY(int teachFound READ teachFound NOTIFY teachChanged)
@@ -58,8 +61,9 @@ public:
     QString color() const { return m_settings.color.name(); }
     int brightness() const { return m_settings.brightness; }
     int speed() const { return m_settings.speed; }
-    int whiteRed() const { return m_settings.whiteRed; }
-    int whiteBlue() const { return m_settings.whiteBlue; }
+    // What is in effect: the user's value, or the keyboard's default.
+    int whiteRed() const { return m_settings.whiteRed > 0 ? m_settings.whiteRed : Device::defaultWhite(m_driver); }
+    int whiteBlue() const { return m_settings.whiteBlue > 0 ? m_settings.whiteBlue : Device::defaultWhite(m_driver); }
     bool usesColor() const { return Engine::preset(m_settings.preset).usesColor; }
     bool usesSpeed() const { return Engine::preset(m_settings.preset).usesSpeed; }
     QVariantList presets() const;
@@ -77,6 +81,12 @@ public:
     int frame() const { return m_frame; }
     int downTick() const { return m_downTick; }
     QString deviceStatus() const { return m_deviceStatus; }
+    // The connected keyboard's name, empty when there is none.
+    QString deviceName() const { return m_deviceName; }
+    QString driverName() const { return m_driver == Device::ViaOpenRgb ? "openrgb" : m_driver == Device::Native ? "native" : ""; }
+    // Matching lights to keys by hand is only needed, and only works, for the
+    // native keyboard; other drivers report their own layout.
+    bool canSync() const { return m_driver != Device::ViaOpenRgb; }
     bool autostart() const;
     bool teaching() const { return m_teachLed >= 0; }
     int teachFound() const;
@@ -143,7 +153,9 @@ private:
     void quickAdvance();
     void setNotice(const QString &notice);
 
-    QString m_configPath, m_layoutPath, m_autostartPath;
+    QString m_directory, m_configPath, m_layoutPath, m_autostartPath;
+    Device::Driver m_driver = Device::None;
+    QString m_deviceName;
     Settings m_settings;
     KeyboardLayout m_layout;
     Engine m_engine;
@@ -169,7 +181,7 @@ private:
     QTimer m_noticeTimer;
 };
 
-#define KEYGLOW_VERSION "1.2.1"
+#define KEYGLOW_VERSION "1.3.0"
 
 // What `keyglow list --json` and `keyglow status --json` print. A bar widget
 // or script reads these instead of scraping the plain-text commands.

@@ -5,6 +5,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
 #include <cerrno>
 #include <fcntl.h>
 #include <linux/hidraw.h>
@@ -40,18 +43,73 @@ QStringList Device::findAllPaths(const QString &sysRoot) {
     return paths;
 }
 
+QString Device::hidrawRoot() { return qEnvironmentVariable("KEYGLOW_HIDRAW_ROOT", "/sys/class/hidraw"); }
+
 Device::Status Device::check() {
-    const QString path = findPath();
+    const QString path = findPath(hidrawRoot());
     if (path.isEmpty())
         return Missing;
     return access(path.toLocal8Bit().constData(), R_OK | W_OK) == 0 ? Ready : NoPermission;
 }
 
+static const char *kNativeName = "CB Artemis";
+
+QString Device::layoutPath(const QString &directory, Driver driver) {
+    return directory + (driver == ViaOpenRgb ? "/openrgb-layout.json" : "/layout.json");
+}
+
+Device::Info Device::info() const {
+    Info i;
+    i.status = m_status;
+    i.driver = driver();
+    i.name = i.driver == ViaOpenRgb ? m_openRgb.controller().name : i.driver == Native ? kNativeName : QString();
+    return i;
+}
+
+void Device::writeState(const QString &directory) const {
+    const Info i = info();
+    if (i.driver == ViaOpenRgb)
+        layout().save(layoutPath(directory, ViaOpenRgb));
+    QSaveFile file(directory + "/device.json");
+    if (!file.open(QIODevice::WriteOnly))
+        return;
+    file.write(QJsonDocument(QJsonObject{{"driver", i.driver == ViaOpenRgb ? "openrgb" : i.driver == Native ? "native" : ""},
+                                         {"name", i.name},
+                                         {"pid", qint64(getpid())}})
+                   .toJson(QJsonDocument::Compact));
+    file.commit();
+}
+
+void Device::clearState(const QString &directory) { QFile::remove(directory + "/device.json"); }
+
+Device::Info Device::probe(const QString &directory) {
+    Info i;
+    i.status = check();
+    if (i.status != Missing) {
+        i.driver = Native;
+        i.name = kNativeName;
+        return i;
+    }
+    // Not the native keyboard: the streamer says what it found, if it is
+    // still running.
+    QFile file(directory + "/device.json");
+    if (!file.open(QIODevice::ReadOnly))
+        return i;
+    const QJsonObject o = QJsonDocument::fromJson(file.readAll()).object();
+    if (o.value("driver").toString() == "openrgb" && QFileInfo::exists("/proc/" + QString::number(o.value("pid").toInteger()))) {
+        i.status = Ready;
+        i.driver = ViaOpenRgb;
+        i.name = o.value("name").toString();
+    }
+    return i;
+}
+
 bool Device::open() {
-    const QString path = findPath();
+    close();
+    const QString path = findPath(hidrawRoot());
     if (path.isEmpty()) {
-        m_status = Missing;
-        return false;
+        m_status = m_openRgb.open() ? Ready : Missing;
+        return m_status == Ready;
     }
     m_fd = ::open(path.toLocal8Bit().constData(), O_RDWR | O_CLOEXEC);
     if (m_fd < 0) {
@@ -78,9 +136,17 @@ bool Device::open() {
     return true;
 }
 
-bool Device::send(const QByteArray &frame) {
-    if (m_fd < 0 && !open())
+bool Device::send(const QVector<QColor> &colors) {
+    if (!isOpen() && !open())
         return false;
+    if (m_fd < 0) {
+        if (m_openRgb.send(colors))
+            return true;
+        close();
+        m_status = Missing;
+        return false;
+    }
+    const QByteArray frame = Lighting::frame(colors);
     if (ioctl(m_fd, HIDIOCSFEATURE(frame.size()), frame.constData()) < 0) {
         // Unplugged, or asleep: drop the handle and look for it again next time.
         close();
@@ -94,4 +160,5 @@ void Device::close() {
     if (m_fd >= 0)
         ::close(m_fd);
     m_fd = -1;
+    m_openRgb.close();
 }

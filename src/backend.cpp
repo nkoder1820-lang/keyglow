@@ -20,6 +20,7 @@ using Lighting::Rows;
 Backend::Backend(const QString &configDirectory, bool live, QObject *parent) : QObject(parent) {
     const QString directory = configDirectory.isEmpty()
         ? QFileInfo(Settings::defaultPath()).absolutePath() : configDirectory;
+    m_directory = directory;
     m_configPath = directory + "/config.json";
     m_layoutPath = directory + "/layout.json";
     m_autostartPath = configDirectory.isEmpty()
@@ -49,8 +50,8 @@ Backend::Backend(const QString &configDirectory, bool live, QObject *parent) : Q
             m_engine.press(usage, QDateTime::currentMSecsSinceEpoch());
     });
     connect(&m_input, &KeyInput::changed, this, [this] { ++m_downTick; emit downChanged(); });
-    render();
     refreshDevice();
+    render();
 
     if (live) {
         QDir().mkpath(directory);
@@ -244,7 +245,7 @@ void Backend::setBrightness(int brightness) {
 
 void Backend::setWhiteRed(int percent) {
     percent = qBound(5, percent, 100);
-    if (percent == m_settings.whiteRed)
+    if (percent == whiteRed())
         return;
     m_settings.whiteRed = percent;
     touch();
@@ -252,7 +253,7 @@ void Backend::setWhiteRed(int percent) {
 
 void Backend::setWhiteBlue(int percent) {
     percent = qBound(5, percent, 100);
-    if (percent == m_settings.whiteBlue)
+    if (percent == whiteBlue())
         return;
     m_settings.whiteBlue = percent;
     touch();
@@ -286,10 +287,12 @@ void Backend::setSpeed(int speed) {
 }
 
 void Backend::paint(int led) {
-    if (led < 0 || led >= Leds)
+    if (led < 0 || led >= m_layout.leds())
         return;
     if (m_settings.preset != "custom")
         setPreset("custom");
+    if (led >= m_settings.custom.size())
+        m_settings.custom.resize(m_layout.leds(), QColor("#ffffff"));
     if (m_settings.custom[led] == m_settings.color)
         return;
     m_settings.custom[led] = m_settings.color;
@@ -335,14 +338,29 @@ void Backend::render() {
 }
 
 void Backend::refreshDevice() {
+    const Device::Info info = Device::probe(m_directory);
     QString status;
-    switch (Device::check()) {
+    switch (info.status) {
     case Device::Ready: status = "ready"; break;
     case Device::NoPermission: status = "permission"; break;
     default: status = "missing"; break;
     }
-    if (status != m_deviceStatus) {
+    // While nothing is connected the last keyboard's layout stays on screen.
+    const Device::Driver driver = info.driver == Device::None ? m_driver : info.driver;
+    const bool driverChanged = driver != m_driver;
+    if (driverChanged && !teaching()) {
+        m_driver = driver;
+        m_layoutPath = Device::layoutPath(m_directory, m_driver);
+        m_layout = KeyboardLayout::load(m_layoutPath);
+        m_engine.setLayout(m_layout);
+        ++m_layoutVersion;
+        emit layoutChanged();
+        emit changed(); // the white balance default follows the keyboard
+        render();
+    }
+    if (status != m_deviceStatus || info.name != m_deviceName || driverChanged) {
         m_deviceStatus = status;
+        m_deviceName = info.name;
         emit deviceStatusChanged();
     }
 }
@@ -386,6 +404,8 @@ void Backend::setNotice(const QString &notice) {
 }
 
 void Backend::startQuickSync() {
+    if (!canSync())
+        return;
     m_quick = std::make_unique<QuickSync>();
     m_quickUsages.clear();
     m_teachNote.clear();
@@ -416,6 +436,8 @@ void Backend::quickAdvance() {
 }
 
 void Backend::startTeaching() {
+    if (!canSync())
+        return;
     m_quick.reset();
     m_teachPairs.clear();
     m_teachTrail.clear();
@@ -581,6 +603,8 @@ void Backend::cancelTeaching() {
 }
 
 void Backend::forgetLayout() {
+    if (!canSync())
+        return;
     QFile::remove(m_layoutPath);
     m_layout = KeyboardLayout();
     m_engine.setLayout(m_layout);
@@ -621,8 +645,10 @@ QJsonObject Cli::status(const Backend &backend) {
             {"usesColor", backend.usesColor()},
             {"usesSpeed", backend.usesSpeed()},
             {"device", backend.deviceStatus()},
+            {"keyboard", backend.deviceName()},
+            {"driver", backend.driverName()},
             {"synced", backend.taught()},
-            {"whiteRed", s.whiteRed},
-            {"whiteBlue", s.whiteBlue},
+            {"whiteRed", backend.whiteRed()},
+            {"whiteBlue", backend.whiteBlue()},
             {"favorites", QJsonArray::fromStringList(s.favorites)}};
 }

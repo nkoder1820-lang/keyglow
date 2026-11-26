@@ -1,19 +1,44 @@
 # Keyglow
 
-Backlight scenes for the Cosmic Byte CB Artemis keyboard (68 keys, SinoWealth
-`258a:010c`) on Linux. A realistic on-screen keyboard shows exactly what the
-real one is doing, and fifty-odd scenes range from a quiet candle to keys
-that flare as you type.
+Backlight scenes for RGB keyboards on Linux. An on-screen keyboard shows
+exactly what the real one is doing, and fifty-odd scenes range from a quiet
+candle to keys that flare as you type.
 
 It comes in two parts that share one repository:
 
 - **The app** (`keyglow`): the window, the background process that drives the
   lights, and a command for key bindings and scripts.
-- **The Omarchy bar widget** (Keyglow Artemis): a keyboard icon in the bar that
+- **The Omarchy bar widget** (Keyglow RGB): a keyboard icon in the bar that
   opens a scene picker with brightness, speed and colour.
 
-Keyglow only knows this one keyboard. On any other board the widget will say
-"Keyboard unplugged" and do nothing.
+## Which keyboards
+
+Keyglow reaches a keyboard in one of two ways and picks by itself:
+
+- **Cosmic Byte CB Artemis** (68 keys, SinoWealth `258a:010c`): driven
+  directly, nothing else to install. This is the keyboard Keyglow was written
+  on and the only one it has been tried on by hand.
+- **Any keyboard OpenRGB supports** (several hundred, from Corsair, Razer,
+  Logitech, SteelSeries, Keychron, Ducky, ASUS, MSI and many more; see
+  [openrgb.org/devices.html](https://openrgb.org/devices.html)): driven
+  through OpenRGB's local server. Install it and leave its server running:
+
+      sudo pacman -S openrgb
+      openrgb --server
+
+  To have it there after every login, switch on "Start at login" with "Start
+  server" in OpenRGB's settings. Keyglow finds the first keyboard the server
+  lists, reads its key layout from it, and draws that layout on screen. A
+  keyboard lit in a few zones instead of per key is shown as a row of blocks.
+
+If neither is found, the app and the widget say "No keyboard found".
+
+What is different through OpenRGB: there is no "sync" step (the layout comes
+from OpenRGB), white balance starts at neutral, and the scenes that react to
+typing play without reacting, because Keyglow only reads key presses from the
+Artemis. The OpenRGB path is checked against a simulated server in the tests,
+not yet against a shelf of real keyboards: if yours is listed by OpenRGB and
+misbehaves here, please open an issue.
 
 ## Install on Omarchy
 
@@ -23,12 +48,14 @@ Keyglow only knows this one keyboard. On any other board the widget will say
 The first line adds the bar widget. The second builds the app and installs it
 as an Arch package called `keyglow`; it asks for your password once. The
 package holds `/usr/bin/keyglow`, a launcher entry, an icon, and one udev rule
-that lets your user reach the keyboard's lighting interface without root.
-Unplug the keyboard and plug it back in afterwards, then open Keyglow from the
-launcher once to match the lights to your keys.
+that lets your user reach the CB Artemis's lighting interface without root.
+With a CB Artemis, unplug it and plug it back in afterwards, then open Keyglow
+from the launcher once to match the lights to your keys. With any other
+keyboard, start OpenRGB's server as described above.
 
 **Needs:** `qt6-base`, `qt6-declarative` and `qt6-wayland` (the install step
-pulls them in), plus `base-devel` to build. The widget needs `keyglow` 1.1 or
+pulls them in), plus `base-devel` to build, and `openrgb` for keyboards other
+than the CB Artemis. The widget needs `keyglow` 1.1 or
 newer on your `PATH` and says so in its panel when it is missing.
 
 **Changes outside the plugin folder:** the package above, and Keyglow's own
@@ -65,7 +92,11 @@ Open or close the panel from a key binding with
 
 ## How it works
 
-The keyboard has no Linux backlight driver, and the only known protocol is
+This section is about the CB Artemis; other keyboards get the same frames
+through OpenRGB's SDK protocol (`src/openrgb.cpp`), about fifteen times a
+second.
+
+The Artemis has no Linux backlight driver, and the only known protocol is
 "direct" mode: the PC streams colours, and the keyboard falls back to its own
 effect about a second after the stream stops. So Keyglow is two halves of one
 binary: the window edits `~/.config/keyglow/config.json`, and `keyglow daemon`

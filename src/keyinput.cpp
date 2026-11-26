@@ -30,7 +30,7 @@ void KeyInput::setActive(bool active) {
 }
 
 void KeyInput::open() {
-    for (const QString &path : Device::findAllPaths()) {
+    for (const QString &path : Device::findAllPaths(Device::hidrawRoot())) {
         const int fd = ::open(path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0)
             continue;

@@ -2,16 +2,153 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QTcpServer>
 #include <QTemporaryDir>
+#include <QThread>
+#include <QtEndian>
 #include <QtTest>
+#include <atomic>
+#include <unistd.h>
 
 #include "backend.h"
 #include "device.h"
 #include "keyinput.h"
 #include "lighting.h"
+#include "openrgb.h"
 #include "sceneimages.h"
 #include "theme.h"
 #include "translator.h"
+
+// An OpenRGB "controller data" reply, written out field by field from the
+// SDK document, for protocol version 1.
+namespace Fake {
+void u32(QByteArray &b, quint32 v) { char r[4]; qToLittleEndian(v, r); b.append(r, 4); }
+void u16(QByteArray &b, quint16 v) { char r[2]; qToLittleEndian(v, r); b.append(r, 2); }
+void text(QByteArray &b, const QByteArray &t) { u16(b, quint16(t.size() + 1)); b.append(t); b.append('\0'); }
+
+struct Zone { QByteArray name; int leds; int rows; int columns; QVector<quint32> map; };
+
+QByteArray controller(int type, const QByteArray &name, const QVector<Zone> &zones, const QList<QByteArray> &leds)
+{
+    QByteArray b;
+    u32(b, 0); // size, filled in below
+    u32(b, quint32(type));
+    text(b, name);
+    text(b, "Vendor");
+    text(b, "Description");
+    text(b, "1.0");
+    text(b, "serial");
+    text(b, "HID: /dev/hidraw9");
+    u16(b, 2); // modes
+    u32(b, 0);
+    for (const QByteArray &mode : {QByteArray("Direct"), QByteArray("Rainbow")}) {
+        text(b, mode);
+        for (int i = 0; i < 9; ++i)
+            u32(b, 7);
+        u16(b, 2); // two colours
+        u32(b, 0x00112233);
+        u32(b, 0x00445566);
+    }
+    u16(b, quint16(zones.size()));
+    for (const Zone &z : zones) {
+        text(b, z.name);
+        u32(b, z.rows ? 2 : 1);
+        u32(b, quint32(z.leds));
+        u32(b, quint32(z.leds));
+        u32(b, quint32(z.leds));
+        if (z.rows) {
+            u16(b, quint16(8 + 4 * z.map.size()));
+            u32(b, quint32(z.rows));
+            u32(b, quint32(z.columns));
+            for (quint32 v : z.map)
+                u32(b, v);
+        } else {
+            u16(b, 0);
+        }
+    }
+    u16(b, quint16(leds.size()));
+    for (const QByteArray &led : leds) {
+        text(b, led);
+        u32(b, 0);
+    }
+    u16(b, quint16(leds.size()));
+    for (int i = 0; i < leds.size(); ++i)
+        u32(b, 0);
+    qToLittleEndian(quint32(b.size()), b.data());
+    return b;
+}
+
+// A small keyboard: two rows of keys with a wide space bar, and a light bar.
+QByteArray keyboard()
+{
+    const quint32 x = OpenRgb::NoLed;
+    return controller(5, "Test Board 60",
+                      {{"Keyboard", 8, 2, 6, {0, 1, 2, 3, x, 4, /* row 2 */ 5, x, 6, x, x, 7}},
+                       {"Light Bar", 3, 0, 0, {}}},
+                      {"Key: Left Shift", "Key: A", "Key: B", "Key: C", "Key: Enter", "Key: Left Control", "Key: Space",
+                       "Key: Right Fn", "Bar 1", "Bar 2", "Bar 3"});
+}
+
+// Stands in for "openrgb --server": answers the handful of packets the
+// client uses and keeps the last colours it was sent.
+class Server : public QThread {
+public:
+    quint16 port = 0;
+    std::atomic<bool> ready{false}, customMode{false};
+    QByteArray lastColors;
+    QByteArray clientName;
+    quint32 updatedDevice = 99;
+
+    void run() override
+    {
+        QTcpServer server;
+        server.listen(QHostAddress::LocalHost);
+        port = server.serverPort();
+        ready = true;
+        if (!server.waitForNewConnection(5000))
+            return;
+        QTcpSocket *s = server.nextPendingConnection();
+        auto reply = [&](quint32 device, quint32 id, const QByteArray &body) {
+            QByteArray p("ORGB");
+            u32(p, device);
+            u32(p, id);
+            u32(p, quint32(body.size()));
+            s->write(p + body);
+            s->flush();
+        };
+        const QList<QByteArray> devices = {controller(0, "Motherboard", {{"Header", 1, 0, 0, {}}}, {"LED 1"}), keyboard()};
+        for (;;) {
+            while (s->bytesAvailable() < 16)
+                if (!s->waitForReadyRead(3000))
+                    return;
+            const QByteArray h = s->read(16);
+            const quint32 device = qFromLittleEndian<quint32>(h.constData() + 4);
+            const quint32 id = qFromLittleEndian<quint32>(h.constData() + 8);
+            const quint32 size = qFromLittleEndian<quint32>(h.constData() + 12);
+            while (s->bytesAvailable() < size)
+                if (!s->waitForReadyRead(3000))
+                    return;
+            const QByteArray body = s->read(size);
+            QByteArray out;
+            switch (id) {
+            case 50: clientName = body; break;
+            case 40: u32(out, 5); reply(0, 40, out); break;
+            case 0: u32(out, quint32(devices.size())); reply(0, 0, out); break;
+            case 1:
+                // The client asked for protocol 1, which is what `controller` writes.
+                if (body.size() == 4 && qFromLittleEndian<quint32>(body.constData()) == 1)
+                    reply(device, 1, devices.value(int(device)));
+                break;
+            case 1100: customMode = device == 1; break;
+            case 1050:
+                updatedDevice = device;
+                lastColors = body;
+                return;
+            }
+        }
+    }
+};
+}
 
 class KeyglowTests : public QObject {
     Q_OBJECT
@@ -138,7 +275,7 @@ private slots:
         bad.close();
         QCOMPARE(Settings::load(path).preset, Settings().preset);
         QCOMPARE(Settings::load(path).brightness, 100);
-        QCOMPARE(Settings::load(path).identify, Lighting::Leds - 1);
+        QCOMPARE(Settings::load(path).identify, Lighting::MaxLeds - 1);
     }
 
     void jsonForBarsListsEverySceneAndTheCurrentState()
@@ -180,19 +317,190 @@ private slots:
 
     void whiteIsBalancedForTheKeyboardButPureColoursStayFull()
     {
-        Settings s; // red and blue at 28% of green
-        QCOMPARE(Lighting::balanced(QColor("#ffffff"), s), QColor(71, 255, 71));
-        QCOMPARE(Lighting::balanced(QColor("#ff0000"), s), QColor("#ff0000"));
-        QCOMPARE(Lighting::balanced(QColor("#0000ff"), s), QColor("#0000ff"));
-        QCOMPARE(Lighting::balanced(QColor("#00ff00"), s), QColor("#00ff00"));
-        QCOMPARE(Lighting::balanced(QColor("#000000"), s), QColor("#000000"));
+        int w = Device::defaultWhite(Device::Native); // red and blue at 28% of green
+        QCOMPARE(w, 28);
+        QCOMPARE(Lighting::balanced(QColor("#ffffff"), w, w), QColor(71, 255, 71));
+        QCOMPARE(Lighting::balanced(QColor("#ff0000"), w, w), QColor("#ff0000"));
+        QCOMPARE(Lighting::balanced(QColor("#0000ff"), w, w), QColor("#0000ff"));
+        QCOMPARE(Lighting::balanced(QColor("#00ff00"), w, w), QColor("#00ff00"));
+        QCOMPARE(Lighting::balanced(QColor("#000000"), w, w), QColor("#000000"));
         // Magenta has no green to be weak, so it is left alone; yellow loses red.
-        QCOMPARE(Lighting::balanced(QColor("#ff00ff"), s), QColor("#ff00ff"));
-        QCOMPARE(Lighting::balanced(QColor("#ffff00"), s), QColor(71, 255, 0));
+        QCOMPARE(Lighting::balanced(QColor("#ff00ff"), w, w), QColor("#ff00ff"));
+        QCOMPARE(Lighting::balanced(QColor("#ffff00"), w, w), QColor(71, 255, 0));
         // Dimmer colours keep their level: the strongest channel is unchanged.
-        QCOMPARE(Lighting::balanced(QColor(128, 128, 128), s).green(), 128);
-        s.whiteRed = s.whiteBlue = 100;
-        QCOMPARE(Lighting::balanced(QColor("#c08040"), s), QColor("#c08040"));
+        QCOMPARE(Lighting::balanced(QColor(128, 128, 128), 28, 28).green(), 128);
+        // Other keyboards are left alone until the user says otherwise.
+        w = Device::defaultWhite(Device::ViaOpenRgb);
+        QCOMPARE(Lighting::balanced(QColor("#c08040"), w, w), QColor("#c08040"));
+    }
+
+    void openRgbKeyboardIsReadAndLaidOut()
+    {
+        OpenRgb::Controller c;
+        QVERIFY(OpenRgb::parse(Fake::keyboard(), 1, &c));
+        QVERIFY(c.isKeyboard());
+        QCOMPARE(c.name, QString("Test Board 60"));
+        QCOMPARE(c.vendor, QString("Vendor"));
+        QCOMPARE(c.zones.size(), 2);
+        QCOMPARE(c.zones[0].rows, 2);
+        QCOMPARE(c.zones[0].columns, 6);
+        QCOMPARE(c.ledNames.size(), 11);
+        QCOMPARE(c.ledNames[6], QString("Key: Space"));
+        // Cut short anywhere, it is refused rather than half read.
+        QVERIFY(!OpenRgb::parse(Fake::keyboard().left(120), 1, &c));
+        QVERIFY(!OpenRgb::parse(Fake::keyboard().chopped(3), 1, &c));
+
+        const KeyboardLayout layout = OpenRgb::layoutFor(c);
+        QVERIFY(layout.isPlaced());
+        QVERIFY(layout.taught());
+        QCOMPARE(layout.leds(), 11);
+        QCOMPARE(layout.keys().size(), 8);
+        QCOMPARE(layout.width(), 6.0);
+        QCOMPARE(layout.height(), 2.0);
+        QCOMPARE(layout.ledForUsage(0x04), 1); // A
+        auto key = [&](int led) {
+            for (const Key &k : layout.keys())
+                if (k.led == led)
+                    return k;
+            return Key();
+        };
+        QCOMPARE(key(1).label, QString("A"));
+        QCOMPARE(key(1).x, 1.0);
+        QCOMPARE(key(7).label, QString("Fn"));
+        // Enter takes the empty cell on its left; the space bar the cells on both sides.
+        QCOMPARE(key(4).x, 4.0);
+        QCOMPARE(key(4).w, 2.0);
+        QCOMPARE(key(6).x, 1.0);
+        QCOMPARE(key(6).w, 4.0);
+        QCOMPARE(key(6).y, 1.0);
+        // The light bar is lit but isn't a key.
+        QCOMPARE(layout.extras(), (QVector<int>{8, 9, 10}));
+        QCOMPARE(layout.lights().size(), 3);
+
+        // Every LED gets a colour, the bar included.
+        Engine engine;
+        engine.setLayout(layout);
+        Settings s;
+        s.preset = "solid";
+        s.color = QColor("#ff0000");
+        const QVector<QColor> colors = engine.render(s, 1000);
+        QCOMPARE(colors.size(), 11);
+        for (const QColor &color : colors)
+            QCOMPARE(color, QColor("#ff0000"));
+
+        QTemporaryDir dir;
+        QVERIFY(layout.save(dir.filePath("l.json")));
+        const KeyboardLayout loaded = KeyboardLayout::load(dir.filePath("l.json"));
+        QVERIFY(loaded.isPlaced());
+        QCOMPARE(loaded.leds(), 11);
+        QCOMPARE(loaded.keys().size(), 8);
+        QCOMPARE(loaded.lights().size(), 3);
+        QCOMPARE(loaded.width(), 6.0);
+    }
+
+    void openRgbKeyNamesBecomeUsages()
+    {
+        QString label;
+        QCOMPARE(OpenRgb::usageFor("Key: Q", &label), 0x14);
+        QCOMPARE(label, QString("Q"));
+        QCOMPARE(OpenRgb::usageFor("Key: 0"), 0x27);
+        QCOMPARE(OpenRgb::usageFor("Key: F12", &label), 0x45);
+        QCOMPARE(label, QString("F12"));
+        QCOMPARE(OpenRgb::usageFor("Key: \\ (ANSI)"), 0x31);
+        QCOMPARE(OpenRgb::usageFor("Key: Number Pad 7", &label), 0x5F);
+        QCOMPARE(label, QString("7"));
+        QCOMPARE(OpenRgb::usageFor("Key: Right Arrow"), 0x4F);
+        QCOMPARE(OpenRgb::usageFor("Key: Media Play/Pause", &label), 0);
+        QCOMPARE(label, QString("Medi"));
+        QCOMPARE(OpenRgb::usageFor("Logo", &label), 0);
+        QCOMPARE(label, QString("Logo"));
+    }
+
+    void openRgbKeyboardWithoutAMatrixIsDrawnAsARow()
+    {
+        OpenRgb::Controller c;
+        QVERIFY(OpenRgb::parse(Fake::controller(5, "Four Zone", {{"Zones", 4, 0, 0, {}}}, {"Zone 1", "Zone 2", "Zone 3", "Zone 4"}), 1, &c));
+        const KeyboardLayout layout = OpenRgb::layoutFor(c);
+        QCOMPARE(layout.keys().size(), 4);
+        QCOMPARE(layout.leds(), 4);
+        QCOMPARE(layout.width(), 15.0);
+        QCOMPARE(layout.height(), 1.0);
+        QCOMPARE(layout.keys()[1].x, 3.75);
+    }
+
+    void openRgbClientFindsTheKeyboardAndSendsColours()
+    {
+        Fake::Server server;
+        server.start();
+        QTRY_VERIFY(server.ready);
+        OpenRgb::Client client;
+        QVERIFY(client.open("127.0.0.1", server.port));
+        QVERIFY(client.isOpen());
+        QCOMPARE(client.controller().index, 1); // the motherboard is passed over
+        QCOMPARE(client.controller().name, QString("Test Board 60"));
+        QVector<QColor> colors(11, QColor(Qt::black));
+        colors[0] = QColor("#112233");
+        colors[10] = QColor("#aabbcc");
+        QVERIFY(client.send(colors));
+        QVERIFY(server.wait(5000));
+        QVERIFY(server.customMode);
+        QCOMPARE(server.clientName, QByteArray("Keyglow") + '\0');
+        QCOMPARE(server.updatedDevice, quint32(1));
+        // Size, LED count, then red, green, blue and a spare byte per LED.
+        QCOMPARE(server.lastColors.size(), 4 + 2 + 4 * 11);
+        QCOMPARE(server.lastColors.left(6), QByteArray::fromHex("320000000b00"));
+        QCOMPARE(server.lastColors.mid(6, 4), QByteArray::fromHex("11223300"));
+        QCOMPARE(server.lastColors.right(4), QByteArray::fromHex("aabbcc00"));
+
+        // Nothing listening: a plain "no", not a hang.
+        OpenRgb::Client nobody;
+        QVERIFY(!nobody.open("127.0.0.1", 1));
+    }
+
+    void windowFollowsTheKeyboardTheStreamerFound()
+    {
+        QTemporaryDir dir, noHidraw;
+        qputenv("KEYGLOW_HIDRAW_ROOT", noHidraw.path().toLocal8Bit());
+        {
+            Backend none(dir.path(), false);
+            QCOMPARE(none.deviceStatus(), QString("missing"));
+            QCOMPARE(none.deviceName(), QString());
+            QVERIFY(none.canSync());
+            QCOMPARE(none.keys().size(), 68); // the Artemis guess, as before
+        }
+        // What the streamer leaves behind once it drives a keyboard through OpenRGB.
+        OpenRgb::Controller c;
+        QVERIFY(OpenRgb::parse(Fake::keyboard(), 1, &c));
+        QVERIFY(OpenRgb::layoutFor(c).save(Device::layoutPath(dir.path(), Device::ViaOpenRgb)));
+        QFile state(dir.filePath("device.json"));
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        state.write(QString("{\"driver\":\"openrgb\",\"name\":\"Test Board 60\",\"pid\":%1}").arg(getpid()).toUtf8());
+        state.close();
+        {
+            Backend backend(dir.path(), false);
+            QCOMPARE(backend.deviceStatus(), QString("ready"));
+            QCOMPARE(backend.deviceName(), QString("Test Board 60"));
+            QVERIFY(!backend.canSync());
+            QVERIFY(backend.taught());
+            QCOMPARE(backend.keys().size(), 8);
+            QCOMPARE(backend.whiteRed(), 100);
+            backend.startQuickSync();
+            QVERIFY(!backend.teaching());
+            // Painting reaches every LED of this keyboard and no further.
+            backend.setColor("#00ff00");
+            backend.paint(10);
+            backend.paint(11);
+            QCOMPARE(backend.settings().custom.value(10), QColor("#00ff00"));
+            const QJsonObject status = Cli::status(backend);
+            QCOMPARE(status.value("keyboard").toString(), QString("Test Board 60"));
+            QCOMPARE(status.value("driver").toString(), QString("openrgb"));
+        }
+        // A note from a streamer that is gone counts for nothing.
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        state.write("{\"driver\":\"openrgb\",\"name\":\"Test Board 60\",\"pid\":999999999}");
+        state.close();
+        QCOMPARE(Device::probe(dir.path()).status, Device::Missing);
+        qunsetenv("KEYGLOW_HIDRAW_ROOT");
     }
 
     void renamedScenesAndWhiteBalanceSurviveALoad()
@@ -208,7 +516,7 @@ private slots:
         QCOMPARE(s.favorites, QStringList({"terracotta", "nord"}));
         QCOMPARE(s.whiteRed, 40);
         QCOMPARE(s.whiteBlue, 100);
-        QCOMPARE(Settings().whiteRed, 28);
+        QCOMPARE(Settings().whiteRed, 0); // not set: the keyboard's default applies
         QVERIFY(s.save(path));
         QVERIFY(Settings::load(path) == s);
     }

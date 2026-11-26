@@ -21,10 +21,10 @@ struct Settings {
     int speed = 50;                   // 0-100
     QVector<QColor> custom;           // one colour per LED, for the painted preset
     int identify = -1;                // while teaching: the single LED to light
-    // How much red and blue this keyboard needs next to full green for white
-    // to look white, in percent. Its green LEDs are far weaker than the other
-    // two: sent as equal parts, white comes out pink.
-    int whiteRed = 28, whiteBlue = 28;
+    // How much red and blue the keyboard needs next to full green for white
+    // to look white, in percent. 0 means "not set": the connected keyboard's
+    // own default is used (see Device::defaultWhite).
+    int whiteRed = 0, whiteBlue = 0;
 
     Settings();
     static QString defaultPath();
@@ -66,11 +66,19 @@ public:
     static QString defaultPath();
     static KeyboardLayout load(const QString &path);
     static KeyboardLayout fromPairs(const QVector<QPair<int, int>> &ledUsage);
+    // A layout that is already known in full, as other drivers report it:
+    // every key with its place, lights that aren't keys with theirs, and how
+    // many LEDs the keyboard has in all.
+    static KeyboardLayout placed(const QVector<Key> &keys, const QVector<Key> &lights, int leds);
     bool save(const QString &path) const;
 
     const QVector<Key> &keys() const { return m_keys; }
     // Lights that aren't under a key (a light bar, say): lit, but not drawn.
     const QVector<int> &extras() const { return m_extras; }
+    // The same, with where each sits; only filled for placed layouts.
+    const QVector<Key> &lights() const { return m_lights; }
+    bool isPlaced() const { return m_placed; }
+    int leds() const { return m_leds; }
     bool taught() const { return m_taught; }
     double width() const { return m_width; }
     double height() const { return m_height; }
@@ -82,7 +90,9 @@ private:
 
     QVector<Key> m_keys;
     QVector<int> m_extras;
-    bool m_taught = false;
+    QVector<Key> m_lights;
+    bool m_taught = false, m_placed = false;
+    int m_leds = 126;
     double m_width = 16, m_height = 5;
 };
 
@@ -151,13 +161,14 @@ namespace Lighting {
 constexpr int Columns = 21;
 constexpr int Rows = 6;
 constexpr int Leds = Columns * Rows;
+constexpr int MaxLeds = 1024; // the most any keyboard is allowed to report
 constexpr int FrameSize = 520;
-// The feature report that shows those colours once (direct mode).
+// The SinoWealth feature report that shows those colours once (direct mode).
 QByteArray frame(const QVector<QColor> &colors);
 // The colour to send so the keyboard shows `c` as the screen does: red and
 // blue are cut to the keyboard's white balance, then the result is scaled
 // back up so its strongest channel is as bright as before. Pure red stays
 // full red; white becomes mostly green.
-QColor balanced(const QColor &c, const Settings &settings);
-QVector<QColor> balanced(QVector<QColor> colors, const Settings &settings);
+QColor balanced(const QColor &c, int whiteRed, int whiteBlue);
+QVector<QColor> balanced(QVector<QColor> colors, int whiteRed, int whiteBlue);
 }

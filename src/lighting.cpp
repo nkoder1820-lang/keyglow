@@ -61,15 +61,20 @@ Settings Settings::load(const QString &path) {
         if (Engine::preset(id).id == id && !s.favorites.contains(id))
             s.favorites.append(id);
     }
-    s.whiteRed = qBound(5, o.value("whiteRed").toInt(s.whiteRed), 100);
-    s.whiteBlue = qBound(5, o.value("whiteBlue").toInt(s.whiteBlue), 100);
+    if (o.value("whiteRed").toInt() > 0)
+        s.whiteRed = qBound(5, o.value("whiteRed").toInt(), 100);
+    if (o.value("whiteBlue").toInt() > 0)
+        s.whiteBlue = qBound(5, o.value("whiteBlue").toInt(), 100);
     if (QColor c(o.value("color").toString()); c.isValid())
         s.color = c;
     s.brightness = qBound(0, o.value("brightness").toInt(100), 100);
     s.speed = qBound(0, o.value("speed").toInt(50), 100);
-    s.identify = qBound(-1, o.value("identify").toInt(-1), Leds - 1);
+    s.identify = qBound(-1, o.value("identify").toInt(-1), Lighting::MaxLeds - 1);
     const QJsonArray custom = o.value("custom").toArray();
-    for (int i = 0; i < Leds && i < custom.size(); ++i)
+    // Painted colours are kept per LED, for however many the keyboard has.
+    if (custom.size() > s.custom.size())
+        s.custom.resize(qMin(int(custom.size()), Lighting::MaxLeds), QColor("#ffffff"));
+    for (int i = 0; i < s.custom.size() && i < custom.size(); ++i)
         if (QColor c(custom.at(i).toString()); c.isValid())
             s.custom[i] = c;
     return s;
@@ -154,9 +159,48 @@ KeyboardLayout KeyboardLayout::fromPairs(const QVector<QPair<int, int>> &ledUsag
     return layout;
 }
 
+KeyboardLayout KeyboardLayout::placed(const QVector<Key> &keys, const QVector<Key> &lights, int leds) {
+    KeyboardLayout layout;
+    layout.m_leds = qBound(1, leds, Lighting::MaxLeds);
+    layout.m_keys.clear();
+    layout.m_extras.clear();
+    layout.m_width = layout.m_height = 1;
+    for (const Key &k : keys)
+        if (k.led >= 0 && k.led < layout.m_leds) {
+            layout.m_keys.append(k);
+            layout.m_width = qMax(layout.m_width, k.x + k.w);
+            layout.m_height = qMax(layout.m_height, k.y + 1);
+        }
+    for (const Key &k : lights)
+        if (k.led >= 0 && k.led < layout.m_leds) {
+            layout.m_lights.append(k);
+            layout.m_extras.append(k.led);
+        }
+    layout.m_taught = layout.m_placed = true;
+    return layout;
+}
+
 KeyboardLayout KeyboardLayout::load(const QString &path) {
+    const QJsonObject file = readJson(path);
+    if (file.value("placed").toBool()) {
+        QVector<Key> keys, lights;
+        for (const QJsonValue &v : file.value("keys").toArray()) {
+            const QJsonObject o = v.toObject();
+            Key k;
+            k.led = o.value("led").toInt(-1);
+            k.usage = o.value("usage").toInt();
+            k.x = o.value("x").toDouble();
+            k.y = o.value("y").toDouble();
+            k.w = qMax(0.25, o.value("w").toDouble(1));
+            k.label = o.value("label").toString();
+            (k.usage < 0 ? lights : keys).append(k);
+        }
+        if (!keys.isEmpty())
+            return placed(keys, lights, file.value("leds").toInt());
+        return {};
+    }
     QVector<QPair<int, int>> pairs;
-    for (const QJsonValue &v : readJson(path).value("keys").toArray()) {
+    for (const QJsonValue &v : file.value("keys").toArray()) {
         const int led = v.toObject().value("led").toInt(-1);
         if (led >= 0 && led < Leds)
             pairs.append({led, v.toObject().value("usage").toInt()});
@@ -166,6 +210,16 @@ KeyboardLayout KeyboardLayout::load(const QString &path) {
 
 bool KeyboardLayout::save(const QString &path) const {
     QJsonArray keys;
+    if (m_placed) {
+        auto entry = [](const Key &k, int usage) {
+            return QJsonObject{{"led", k.led}, {"usage", usage}, {"x", k.x}, {"y", k.y}, {"w", k.w}, {"label", k.label}};
+        };
+        for (const Key &k : m_keys)
+            keys.append(entry(k, k.usage));
+        for (const Key &k : m_lights)
+            keys.append(entry(k, -1));
+        return writeJson(path, {{"placed", true}, {"leds", m_leds}, {"keys", keys}});
+    }
     for (const Key &k : m_keys)
         keys.append(QJsonObject{{"led", k.led}, {"usage", k.usage}});
     for (int led : m_extras)
@@ -487,8 +541,20 @@ void Engine::setLayout(const KeyboardLayout &layout) {
     m_cx = layout.width() / 2;
     m_cy = layout.height() / 2;
     m_nodes.clear();
-    QVector<bool> seen(Leds, false);
+    QVector<bool> seen(layout.leds(), false);
     const double w = qMax(1.0, layout.width()), h = qMax(1.0, layout.height());
+    if (layout.isPlaced()) {
+        // The driver said where everything is: nothing to guess.
+        for (const Key &k : layout.keys()) {
+            const double cx = k.x + k.w / 2, cy = k.y + 0.5;
+            m_nodes.append({k.led, k.usage, cx, cy, cx / w, h > 1 ? (cy - 0.5) / (h - 1) : 0.5});
+        }
+        for (const Key &k : layout.lights()) {
+            const double cx = qBound(0.0, k.x + k.w / 2, w), cy = qBound(0.5, k.y + 0.5, h - 0.5);
+            m_nodes.append({k.led, -1, cx, cy, cx / w, h > 1 ? (cy - 0.5) / (h - 1) : 0.5});
+        }
+        return;
+    }
     for (const Key &k : layout.keys()) {
         const double cx = k.x + k.w / 2, cy = k.y + 0.5;
         m_nodes.append({k.led, k.usage, cx, cy, cx / w, h > 1 ? (cy - 0.5) / (h - 1) : 0.5});
@@ -778,12 +844,13 @@ QColor Engine::shade(const Settings &s, const Node &n, double t, qint64 ms) cons
 }
 
 QVector<QColor> Engine::render(const Settings &s, qint64 ms) {
-    QVector<QColor> out(Leds, QColor(Qt::black));
+    QVector<QColor> out(m_layout.leds(), QColor(Qt::black));
     if (s.identify >= 0) {
         // Everything glows dimly so the board is clearly alive, and the one
         // light being asked about stands out in white.
         out.fill(QColor(0, 14, 40));
-        out[s.identify] = QColor(Qt::white);
+        if (s.identify < out.size())
+            out[s.identify] = QColor(Qt::white);
         return out;
     }
     if (!s.power || preset(s.preset).kind == Kind::Onboard)
@@ -816,10 +883,12 @@ QByteArray Lighting::frame(const QVector<QColor> &colors) {
     return buf;
 }
 
-QColor Lighting::balanced(const QColor &c, const Settings &settings) {
-    const double r = c.red() * settings.whiteRed / 100.0;
+QColor Lighting::balanced(const QColor &c, int whiteRed, int whiteBlue) {
+    if (whiteRed >= 100 && whiteBlue >= 100)
+        return c;
+    const double r = c.red() * whiteRed / 100.0;
     const double g = c.green();
-    const double b = c.blue() * settings.whiteBlue / 100.0;
+    const double b = c.blue() * whiteBlue / 100.0;
     const double before = qMax(c.red(), qMax(c.green(), c.blue()));
     const double after = qMax(r, qMax(g, b));
     if (after <= 0)
@@ -828,8 +897,8 @@ QColor Lighting::balanced(const QColor &c, const Settings &settings) {
     return QColor(qBound(0, qRound(r * k), 255), qBound(0, qRound(g * k), 255), qBound(0, qRound(b * k), 255));
 }
 
-QVector<QColor> Lighting::balanced(QVector<QColor> colors, const Settings &settings) {
+QVector<QColor> Lighting::balanced(QVector<QColor> colors, int whiteRed, int whiteBlue) {
     for (QColor &c : colors)
-        c = balanced(c, settings);
+        c = balanced(c, whiteRed, whiteBlue);
     return colors;
 }

@@ -1,4 +1,5 @@
-// keyglow — backlight scenes for the Cosmic Byte CB Artemis keyboard.
+// keyglow — backlight scenes for RGB keyboards: the Cosmic Byte CB Artemis
+// directly, others through OpenRGB.
 
 #include <QCoreApplication>
 #include <QDir>
@@ -111,8 +112,7 @@ static int runCommand(const QStringList &args) {
         bool okRed = false, okBlue = false;
         const int red = value.toInt(&okRed), blue = args.value(2).toInt(&okBlue);
         if (!okRed || !okBlue || red < 5 || red > 100 || blue < 5 || blue > 100) {
-            err << "keyglow: white takes two numbers from 5 to 100, red then blue (now " << s.whiteRed << " "
-                << s.whiteBlue << ")\n";
+            err << "keyglow: white takes two numbers from 5 to 100, red then blue\n";
             return 1;
         }
         s.whiteRed = red;

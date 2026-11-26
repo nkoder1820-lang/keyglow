@@ -153,7 +153,7 @@ function helpLine(status) {
   if (status.device === "permission")
     return "Unplug the keyboard and plug it back in, so the new access rule applies."
   if (status.device === "missing")
-    return "Plug in the CB Artemis by USB cable. Lighting does not work over wireless."
+    return "No keyboard found. Plug in a CB Artemis by USB cable, or start OpenRGB's server (openrgb --server) for any other keyboard."
   if (!status.synced) return "Open Keyglow once to match the lights to your keys."
   return ""
 }
