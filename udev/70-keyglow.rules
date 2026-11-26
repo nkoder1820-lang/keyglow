@@ -1,0 +1,3 @@
+# Lets the logged-in user talk to the Cosmic Byte Artemis (SinoWealth 258a:010c)
+# lighting interface without root.
+KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="010c", TAG+="uaccess"

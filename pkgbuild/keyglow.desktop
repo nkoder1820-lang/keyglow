@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Keyglow
+Comment=Set the keyboard backlight colour, effect and brightness
+Exec=keyglow
+Icon=keyglow
+Terminal=false
+Categories=Utility;Settings;
+StartupWMClass=keyglow

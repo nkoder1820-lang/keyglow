@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+# bin/install points this outside the repo, so a copy living in the Omarchy
+# plugins folder stays free of build output.
+BUILD="${KEYGLOW_BUILD_DIR:-$ROOT/build}"
+mkdir -p "$BUILD"
+cd "$BUILD"
+
+qmake6 "$ROOT/keyglow.pro"
+make -j"$(nproc)"
+
+echo "Built $BUILD/keyglow"

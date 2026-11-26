@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+# Builds Keyglow and installs it as an Arch package: the keyglow command, its
+# launcher entry and the udev rule that lets you reach the keyboard without root.
+# makepkg asks for your password once, to install the package.
+# Remove it again with: sudo pacman -R keyglow
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+WORK="${XDG_CACHE_HOME:-$HOME/.cache}/keyglow"
+mkdir -p "$WORK"
+
+export KEYGLOW_BUILD_DIR="$WORK/build"
+export BUILDDIR="$WORK/makepkg"
+export PKGDEST="$WORK/packages"
+cd "$ROOT/pkgbuild"
+makepkg -fsi "$@"
+
+# A background process from before the update would keep running the old code.
+if pkill -u "$(id -u)" -f 'keyglow daemon$'; then
+  sleep 0.5
+  setsid -f /usr/bin/keyglow daemon >/dev/null 2>&1 </dev/null
+fi

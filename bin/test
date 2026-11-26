@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+mkdir -p "$ROOT/build/tests"
+cd "$ROOT/build/tests"
+
+qmake6 "$ROOT/tests/keyglow_tests.pro"
+make -j"$(nproc)"
+QT_QPA_PLATFORM=offscreen ./keyglow_tests
+
+# The bar panel's logic, when node is around.
+if command -v node >/dev/null 2>&1; then
+  node "$ROOT/tests/plugin_model.js"
+fi
