@@ -169,7 +169,7 @@ private:
     QTimer m_noticeTimer;
 };
 
-#define KEYGLOW_VERSION "1.2.0"
+#define KEYGLOW_VERSION "1.2.1"
 
 // What `keyglow list --json` and `keyglow status --json` print. A bar widget
 // or script reads these instead of scraping the plain-text commands.

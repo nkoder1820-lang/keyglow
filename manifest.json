@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.nkoder1820-lang.keyglow",
   "name": "Keyglow Artemis",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "nkoder1820-lang",
   "license": "MIT",
   "description": "Backlight scenes for the Cosmic Byte CB Artemis keyboard from the Omarchy bar: 53 scenes, brightness, speed and colour.",

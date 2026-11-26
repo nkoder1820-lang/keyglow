@@ -7,8 +7,11 @@ ApplicationWindow {
     id: win
     width: 1100
     height: 700
-    minimumWidth: 880
-    minimumHeight: 560
+    // A tiling window manager hands out whatever size it likes, so the
+    // layout has to hold together well below the size it opens at.
+    minimumWidth: 520
+    minimumHeight: 420
+    readonly property bool narrow: width < 820
     visible: true
     title: "Keyglow"
     color: "#0e0e10"
@@ -79,6 +82,9 @@ ApplicationWindow {
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                // Without this the row takes its widest child as a minimum and
+                // pushes the side panel out of a narrow window.
+                Layout.minimumWidth: 220
                 spacing: 14
 
                 RowLayout {
@@ -90,14 +96,15 @@ ApplicationWindow {
                         color: backend.deviceStatus === "ready" ? "#3ddc5a" : "#ff6b6b"
                     }
                     Label {
+                        Layout.fillWidth: true
                         opacity: 0.6
+                        elide: Text.ElideRight
                         text: backend.deviceStatus === "ready" ? qsTr("CB Artemis connected")
                             : backend.deviceStatus === "permission" ? qsTr("CB Artemis found, but access is blocked")
                             : qsTr("CB Artemis not found")
                     }
-                    Item { Layout.fillWidth: true }
                     Switch {
-                        text: backend.power ? qsTr("Lights on") : qsTr("Lights off")
+                        text: win.narrow ? "" : backend.power ? qsTr("Lights on") : qsTr("Lights off")
                         checked: backend.power
                         focusPolicy: Qt.NoFocus
                         onToggled: backend.power = checked
@@ -274,188 +281,207 @@ ApplicationWindow {
 
             // Right: how the chosen scene looks.
             Rectangle {
-                Layout.preferredWidth: 268
+                Layout.preferredWidth: win.narrow ? 228 : 268
+                Layout.minimumWidth: Layout.preferredWidth
+                Layout.maximumWidth: Layout.preferredWidth
                 Layout.fillHeight: true
                 radius: theme.radius
                 color: "#15151a"
                 border.color: "#26262d"
 
-                ColumnLayout {
+                // Scrolls when the window is too short to show every control.
+                Flickable {
+                    id: sideScroll
                     anchors.fill: parent
                     anchors.margins: 16
-                    spacing: 10
+                    contentHeight: sideColumn.implicitHeight
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-                    Caption { text: qsTr("Colour") }
-                    Label {
-                        Layout.fillWidth: true
-                        visible: !backend.usesColor
-                        wrapMode: Text.Wrap
-                        opacity: 0.5
-                        font.pixelSize: 12
-                        text: qsTr("This scene brings its own colours.")
-                    }
-                    Grid {
-                        columns: 5
-                        spacing: 8
-                        enabled: backend.usesColor
-                        opacity: enabled ? 1 : 0.3
-                        LayoutMirroring.enabled: false
-                        Repeater {
-                            model: win.swatches
-                            Rectangle {
-                                required property string modelData
-                                width: 40; height: 32
-                                radius: Math.min(4, theme.radius)
-                                color: modelData
-                                border.width: backend.color === modelData ? 3 : 1
-                                border.color: backend.color === modelData ? theme.accent : "#3a3a42"
-                                TapHandler { onTapped: backend.color = parent.modelData }
+                    ColumnLayout {
+                        id: sideColumn
+                        width: sideScroll.width
+                        height: Math.max(implicitHeight, sideScroll.height)
+                        spacing: 10
+
+                        Caption { text: qsTr("Colour") }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: !backend.usesColor
+                            wrapMode: Text.Wrap
+                            opacity: 0.5
+                            font.pixelSize: 12
+                            text: qsTr("This scene brings its own colours.")
+                        }
+                        Grid {
+                            id: swatchGrid
+                            Layout.fillWidth: true
+                            columns: 5
+                            spacing: 8
+                            enabled: backend.usesColor
+                            opacity: enabled ? 1 : 0.3
+                            LayoutMirroring.enabled: false
+                            Repeater {
+                                model: win.swatches
+                                Rectangle {
+                                    required property string modelData
+                                    width: Math.floor((swatchGrid.width - swatchGrid.spacing * 4) / 5); height: 32
+                                    radius: Math.min(4, theme.radius)
+                                    color: modelData
+                                    border.width: backend.color === modelData ? 3 : 1
+                                    border.color: backend.color === modelData ? theme.accent : "#3a3a42"
+                                    TapHandler { onTapped: backend.color = parent.modelData }
+                                }
                             }
                         }
-                    }
-                    // Any hue: drag along the spectrum.
-                    Rectangle {
-                        Layout.fillWidth: true
-                        implicitHeight: 20
-                        radius: Math.min(4, theme.radius)
-                        enabled: backend.usesColor
-                        opacity: enabled ? 1 : 0.3
-                        LayoutMirroring.enabled: false
-                        gradient: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0.000; color: "#ff0000" }
-                            GradientStop { position: 0.167; color: "#ffff00" }
-                            GradientStop { position: 0.333; color: "#00ff00" }
-                            GradientStop { position: 0.500; color: "#00ffff" }
-                            GradientStop { position: 0.667; color: "#0000ff" }
-                            GradientStop { position: 0.833; color: "#ff00ff" }
-                            GradientStop { position: 1.000; color: "#ff0000" }
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            preventStealing: true
-                            function pick(x) {
-                                backend.color = Qt.hsva(Math.max(0, Math.min(0.999, x / width)), 1, 1, 1).toString()
+                        // Any hue: drag along the spectrum.
+                        Rectangle {
+                            Layout.fillWidth: true
+                            implicitHeight: 20
+                            radius: Math.min(4, theme.radius)
+                            enabled: backend.usesColor
+                            opacity: enabled ? 1 : 0.3
+                            LayoutMirroring.enabled: false
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0.000; color: "#ff0000" }
+                                GradientStop { position: 0.167; color: "#ffff00" }
+                                GradientStop { position: 0.333; color: "#00ff00" }
+                                GradientStop { position: 0.500; color: "#00ffff" }
+                                GradientStop { position: 0.667; color: "#0000ff" }
+                                GradientStop { position: 0.833; color: "#ff00ff" }
+                                GradientStop { position: 1.000; color: "#ff0000" }
                             }
-                            onPressed: mouse => pick(mouse.x)
-                            onPositionChanged: mouse => pick(mouse.x)
+                            MouseArea {
+                                anchors.fill: parent
+                                preventStealing: true
+                                function pick(x) {
+                                    backend.color = Qt.hsva(Math.max(0, Math.min(0.999, x / width)), 1, 1, 1).toString()
+                                }
+                                onPressed: mouse => pick(mouse.x)
+                                onPositionChanged: mouse => pick(mouse.x)
+                            }
                         }
-                    }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.topMargin: 8
-                        Caption { text: qsTr("Brightness"); Layout.fillWidth: true }
-                        Label { text: qsTr("%1%").arg(backend.brightness); opacity: 0.7 }
-                    }
-                    Slider {
-                        Layout.fillWidth: true
-                        focusPolicy: Qt.NoFocus
-                        from: 0; to: 100; stepSize: 1
-                        value: backend.brightness
-                        onMoved: backend.brightness = value
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        opacity: backend.usesSpeed ? 1 : 0.35
-                        Caption { text: qsTr("Speed"); Layout.fillWidth: true }
-                        Label { text: qsTr("%1%").arg(backend.speed); opacity: 0.7 }
-                    }
-                    Slider {
-                        Layout.fillWidth: true
-                        focusPolicy: Qt.NoFocus
-                        enabled: backend.usesSpeed
-                        from: 0; to: 100; stepSize: 1
-                        value: backend.speed
-                        onMoved: backend.speed = value
-                    }
-
-                    Caption { text: qsTr("White balance"); Layout.topMargin: 8 }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        opacity: 0.6
-                        font.pixelSize: 12
-                        text: qsTr("If white looks pink, lower these. If it looks green, raise them.")
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: qsTr("Red"); opacity: 0.7; Layout.preferredWidth: 34 }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 8
+                            Caption { text: qsTr("Brightness"); Layout.fillWidth: true }
+                            Label { text: qsTr("%1%").arg(backend.brightness); opacity: 0.7 }
+                        }
                         Slider {
                             Layout.fillWidth: true
                             focusPolicy: Qt.NoFocus
-                            from: 5; to: 100; stepSize: 1
-                            value: backend.whiteRed
-                            onMoved: backend.whiteRed = value
+                            from: 0; to: 100; stepSize: 1
+                            value: backend.brightness
+                            onMoved: backend.brightness = value
                         }
-                        Label { text: qsTr("%1%").arg(backend.whiteRed); opacity: 0.7 }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label { text: qsTr("Blue"); opacity: 0.7; Layout.preferredWidth: 34 }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            opacity: backend.usesSpeed ? 1 : 0.35
+                            Caption { text: qsTr("Speed"); Layout.fillWidth: true }
+                            Label { text: qsTr("%1%").arg(backend.speed); opacity: 0.7 }
+                        }
                         Slider {
                             Layout.fillWidth: true
                             focusPolicy: Qt.NoFocus
-                            from: 5; to: 100; stepSize: 1
-                            value: backend.whiteBlue
-                            onMoved: backend.whiteBlue = value
+                            enabled: backend.usesSpeed
+                            from: 0; to: 100; stepSize: 1
+                            value: backend.speed
+                            onMoved: backend.speed = value
                         }
-                        Label { text: qsTr("%1%").arg(backend.whiteBlue); opacity: 0.7 }
-                    }
 
-                    Caption { text: qsTr("Paint"); Layout.topMargin: 8 }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        opacity: 0.5
-                        font.pixelSize: 12
-                        text: backend.preset === "custom"
-                            ? qsTr("Click or drag across the keys above to colour them.")
-                            : qsTr("Like this look? Freeze it and repaint single keys.")
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        Button {
+                        Caption { text: qsTr("White balance"); Layout.topMargin: 8 }
+                        Label {
                             Layout.fillWidth: true
-                            flat: true
-                            focusPolicy: Qt.NoFocus
-                            Material.roundedScale: theme.radius
-                            text: qsTr("Paint this look")
-                            enabled: backend.preset !== "custom" && backend.preset !== "onboard" && backend.power
-                            onClicked: backend.paintFromCurrent()
+                            wrapMode: Text.WordWrap
+                            opacity: 0.6
+                            font.pixelSize: 12
+                            text: qsTr("If white looks pink, lower these. If it looks green, raise them.")
                         }
-                        Button {
+                        RowLayout {
                             Layout.fillWidth: true
-                            flat: true
-                            focusPolicy: Qt.NoFocus
-                            Material.roundedScale: theme.radius
-                            text: qsTr("Fill all")
-                            onClicked: backend.fillCustom()
+                            Label { text: qsTr("Red"); opacity: 0.7; Layout.preferredWidth: 34 }
+                            Slider {
+                                Layout.fillWidth: true
+                                focusPolicy: Qt.NoFocus
+                                from: 5; to: 100; stepSize: 1
+                                value: backend.whiteRed
+                                onMoved: backend.whiteRed = value
+                            }
+                            Label { text: qsTr("%1%").arg(backend.whiteRed); opacity: 0.7 }
                         }
-                    }
-
-                    Item { Layout.fillHeight: true }
-
-                    Switch {
-                        Layout.fillWidth: true
-                        focusPolicy: Qt.NoFocus
-                        text: qsTr("Light up at login")
-                        checked: backend.autostart
-                        onToggled: backend.autostart = checked
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Button {
-                            flat: true
-                            focusPolicy: Qt.NoFocus
-                            Material.roundedScale: theme.radius
-                            text: backend.taught ? qsTr("Sync keys again") : qsTr("Sync keys")
-                            onClicked: backend.startQuickSync()
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: qsTr("Blue"); opacity: 0.7; Layout.preferredWidth: 34 }
+                            Slider {
+                                Layout.fillWidth: true
+                                focusPolicy: Qt.NoFocus
+                                from: 5; to: 100; stepSize: 1
+                                value: backend.whiteBlue
+                                onMoved: backend.whiteBlue = value
+                            }
+                            Label { text: qsTr("%1%").arg(backend.whiteBlue); opacity: 0.7 }
                         }
-                        Item { Layout.fillWidth: true }
-                        Label { opacity: 0.45; text: qsTr("? shortcuts") }
+
+                        Caption { text: qsTr("Paint"); Layout.topMargin: 8 }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            opacity: 0.5
+                            font.pixelSize: 12
+                            text: backend.preset === "custom"
+                                ? qsTr("Click or drag across the keys above to colour them.")
+                                : qsTr("Like this look? Freeze it and repaint single keys.")
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Button {
+                                Layout.fillWidth: true
+                                flat: true
+                                focusPolicy: Qt.NoFocus
+                                Material.roundedScale: theme.radius
+                                text: qsTr("Paint this look")
+                                enabled: backend.preset !== "custom" && backend.preset !== "onboard" && backend.power
+                                onClicked: backend.paintFromCurrent()
+                            }
+                            Button {
+                                Layout.fillWidth: true
+                                flat: true
+                                focusPolicy: Qt.NoFocus
+                                Material.roundedScale: theme.radius
+                                text: qsTr("Fill all")
+                                onClicked: backend.fillCustom()
+                            }
+                        }
+
+                        Item { Layout.fillHeight: true }
+
+                        Switch {
+                            Layout.fillWidth: true
+                            focusPolicy: Qt.NoFocus
+                            text: qsTr("Light up at login")
+                            checked: backend.autostart
+                            onToggled: backend.autostart = checked
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            // A layout's minimum width is its children's put together,
+                            // and one wide row would widen the whole column past its frame.
+                            Layout.minimumWidth: 0
+                            Button {
+                                flat: true
+                                focusPolicy: Qt.NoFocus
+                                Material.roundedScale: theme.radius
+                                text: backend.taught ? qsTr("Sync keys again") : qsTr("Sync keys")
+                                onClicked: backend.startQuickSync()
+                            }
+                            Item { Layout.fillWidth: true }
+                            Label { visible: !win.narrow; opacity: 0.45; text: qsTr("? shortcuts") }
+                        }
                     }
                 }
             }

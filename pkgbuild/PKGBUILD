@@ -1,5 +1,5 @@
 pkgname=keyglow
-pkgver=1.2.0
+pkgver=1.2.1
 pkgrel=1
 pkgdesc='Backlight scenes for the Cosmic Byte CB Artemis keyboard'
 arch=('x86_64' 'aarch64')

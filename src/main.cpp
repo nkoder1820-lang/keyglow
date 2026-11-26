@@ -12,6 +12,8 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
+#include <QQuickWindow>
+#include <QTimer>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QUrl>
@@ -184,6 +186,19 @@ int main(int argc, char *argv[]) {
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 1;
+
+    // For checking the layout without a screen:
+    //   QT_QPA_PLATFORM=offscreen KEYGLOW_SHOT=out.png KEYGLOW_SIZE=626x688 keyglow
+    if (const QString shot = qEnvironmentVariable("KEYGLOW_SHOT"); !shot.isEmpty()) {
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        const QStringList size = qEnvironmentVariable("KEYGLOW_SIZE").split('x');
+        if (window && size.size() == 2)
+            window->resize(size[0].toInt(), size[1].toInt());
+        QTimer::singleShot(1500, window, [window, shot] {
+            window->grabWindow().save(shot);
+            QCoreApplication::quit();
+        });
+    }
 
     return app.exec();
 }
